@@ -226,7 +226,7 @@ class FCM
     ) do |faraday|
       faraday.adapter Faraday.default_adapter
       faraday.headers["Content-Type"] = "application/json"
-      faraday.headers['Authorization'] = "key=#{@api_key}"
+      faraday.headers['Authorization'] = "Bearer #{jwt_token}"
       extra_headers.each do |key, value|
         faraday.headers[key] = value
       end
