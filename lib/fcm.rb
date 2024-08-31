@@ -156,7 +156,10 @@ class FCM
   end
 
   def topic_subscription(topic, registration_id)
-    for_uri(INSTANCE_ID_API) do |connection|
+    extra_headers = {
+      'access_token_auth': 'true'
+    }
+    for_uri(INSTANCE_ID_API, extra_headers) do |connection|
       response = connection.post("/iid/v1/#{registration_id}/rel/topics/#{topic}")
       build_response(response)
     end
