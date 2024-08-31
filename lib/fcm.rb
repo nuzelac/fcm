@@ -248,14 +248,8 @@ class FCM
       body = JSON.parse(body) unless body.empty?
       response_hash[:canonical_ids] = build_canonical_ids(body, registration_ids) unless registration_ids.empty?
       response_hash[:not_registered_ids] = build_not_registered_ids(body, registration_ids) unless registration_ids.empty?
-    when 400
-      response_hash[:response] = "Only applies for JSON requests. Indicates that the request could not be parsed as JSON, or it contained invalid fields."
-    when 401
-      response_hash[:response] = "There was an error authenticating the sender account."
-    when 503
-      response_hash[:response] = "Server is temporarily unavailable."
-    when 500..599
-      response_hash[:response] = "There was an internal error in the FCM server while trying to process the request."
+    else 
+      raise "Error on fcm: #{response.body}"
     end
     response_hash
   end
