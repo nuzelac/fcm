@@ -1,615 +1,599 @@
+# frozen_string_literal: true
+
 require "spec_helper"
+require "tempfile"
 
 describe FCM do
-  let(:send_url) { "#{FCM::BASE_URI}/fcm/send" }
-  let(:group_notification_base_uri) { "#{FCM::GROUP_NOTIFICATION_BASE_URI}/gcm/notification" }
-  let(:api_key) { "AIzaSyB-1uEai2WiUapxCs2Q0GZYzPu7Udno5aA" }
-  let(:registration_id) { "42" }
-  let(:registration_ids) { ["42"] }
-  let(:key_name) { "appUser-Chris" }
-  let(:project_id) { "123456789" } # https://developers.google.com/cloud-messaging/gcm#senderid
-  let(:notification_key) { "APA91bGHXQBB...9QgnYOEURwm0I3lmyqzk2TXQ" }
-  let(:valid_topic) { "TopicA" }
-  let(:invalid_topic) { "TopicA$" }
-  let(:valid_condition) { "'TopicA' in topics && ('TopicB' in topics || 'TopicC' in topics)" }
-  let(:invalid_condition) { "'TopicA' in topics and some other text ('TopicB' in topics || 'TopicC' in topics)" }
-  let(:invalid_condition_topic) { "'TopicA$' in topics" }
+  let(:project_name) { "test-project" }
+  let(:json_key_path) { "path/to/json/key.json" }
+  let(:client) { described_class.new(json_key_path) }
 
-  it "should raise an error if the api key is not provided" do
-    expect { FCM.new }.to raise_error(ArgumentError)
+  let(:mock_token) { "access_token" }
+  let(:mock_headers) do
+    {
+      "Content-Type" => "application/json",
+      "Authorization" => "Bearer #{mock_token}"
+    }
   end
 
-  it "should raise error if time_to_live is given" do
-    # ref: https://firebase.google.com/docs/cloud-messaging/http-server-ref#ttl
+  let(:client_email) do
+    "83315528762cf7e0-7bbcc3aad87e0083391bc7f234d487" \
+      "c8@developer.gserviceaccount.com"
   end
 
-  describe "#send_v1" do
-    let(:project_name) { "project_name" }
-    let(:send_v1_url) { "#{FCM::BASE_URI_V1}#{project_name}/messages:send" }
-    let(:access_token) { "access_token" }
-    let(:valid_request_v1_headers) do
-      {
-        "Content-Type" => "application/json",
-        "Authorization" => "Bearer #{access_token}",
-      }
-    end
-
-    let(:send_v1_params) do
-      {
-        'token' => '4sdsx',
-        'notification' => {
-          'title' => 'Breaking News',
-          'body' => 'New news story available.'
-        },
-        'data' => {
-          'story_id' => 'story_12345'
-        },
-        'android' => {
-          'notification' => {
-            'click_action' => 'TOP_STORY_ACTIVITY',
-            'body' => 'Check out the Top Story'
-          }
-        },
-        'apns' => {
-          'payload' => {
-            'aps' => {
-              'category' => 'NEW_MESSAGE_CATEGORY'
-            }
-          }
-        }
-      }
-    end
-
-    let(:valid_request_v1_body) do
-      { 'message' => send_v1_params }
-    end
-
-    let(:stub_fcm_send_v1_request) do
-      stub_request(:post, send_v1_url).with(
-        body: valid_request_v1_body.to_json,
-        headers: valid_request_v1_headers
-      ).to_return(
-        # ref: https://firebase.google.com/docs/cloud-messaging/http-server-ref#interpret-downstream
-        body: "{}",
-        headers: {},
-        status: 200,
-      )
-    end
-
-    let(:authorizer_double) { double("token_fetcher") }
-    let(:json_key_path) { double("file alike object") }
-
-    before do
-      expect(json_key_path).to receive(:respond_to?).and_return(true)
-      expect(Google::Auth::ServiceAccountCredentials).to receive_message_chain(:make_creds).and_return(authorizer_double)
-      expect(authorizer_double).to receive(:fetch_access_token!).and_return({ "access_token" => access_token })
-      stub_fcm_send_v1_request
-    end
-
-    it 'should send notification of HTTP V1 using POST to FCM server' do
-      fcm = FCM.new(api_key, json_key_path, project_name)
-      fcm.send_v1(send_v1_params).should eq(
-        response: 'success', body: '{}', headers: {}, status_code: 200
-      )
-      stub_fcm_send_v1_request.should have_been_made.times(1)
-    end
+  let(:client_x509_cert_url) do
+    "https://www.googleapis.com/robot/v1/metadata/x509/" \
+      'fd6b61037dd2bb8585527679" + "-7bbcc3aad87e0083391b' \
+      "c7f234d487c8%40developer.gserviceaccount.com"
   end
 
-  describe "sending notification" do
-    let(:valid_request_body) do
-      { registration_ids: registration_ids }
-    end
-    let(:valid_request_body_with_string) do
-      { registration_ids: registration_id }
-    end
-    let(:valid_request_headers) do
-      {
-        "Content-Type" => "application/json",
-        "Authorization" => "key=#{api_key}",
-      }
-    end
-
-    let(:stub_fcm_send_request) do
-      stub_request(:post, send_url).with(
-        body: valid_request_body.to_json,
-        headers: valid_request_headers,
-      ).to_return(
-        # ref: https://firebase.google.com/docs/cloud-messaging/http-server-ref#interpret-downstream
-        body: "{}",
-        headers: {},
-        status: 200,
-      )
-    end
-
-    let(:stub_fcm_send_request_with_string) do
-      stub_request(:post, send_url).with(
-        body: valid_request_body_with_string.to_json,
-        headers: valid_request_headers,
-      ).to_return(
-        body: "{}",
-        headers: {},
-        status: 200,
-      )
-    end
-
-    let(:stub_fcm_send_request_with_basic_auth) do
-      uri = URI.parse(send_url)
-      uri.user = "a"
-      uri.password = "b"
-      stub_request(:post, uri.to_s).to_return(body: "{}", headers: {}, status: 200)
-    end
-
-    before(:each) do
-      stub_fcm_send_request
-      stub_fcm_send_request_with_string
-      stub_fcm_send_request_with_basic_auth
-    end
-
-    it "should send notification using POST to FCM server" do
-      fcm = FCM.new(api_key)
-      fcm.send(registration_ids).should eq(response: "success", body: "{}", headers: {}, status_code: 200, canonical_ids: [], not_registered_ids: [])
-      stub_fcm_send_request.should have_been_made.times(1)
-    end
-
-    it "should send notification using POST to FCM if id provided as string" do
-      fcm = FCM.new(api_key)
-      fcm.send(registration_id).should eq(response: "success", body: "{}", headers: {}, status_code: 200, canonical_ids: [], not_registered_ids: [])
-      stub_fcm_send_request.should have_been_made.times(1)
-    end
-
-    context "send notification with data" do
-      let!(:stub_with_data) do
-        stub_request(:post, send_url)
-          .with(body: '{"registration_ids":["42"],"data":{"score":"5x1","time":"15:10"}}',
-                headers: valid_request_headers)
-          .to_return(status: 200, body: "", headers: {})
-      end
-      before do
-      end
-      it "should send the data in a post request to fcm" do
-        fcm = FCM.new(api_key)
-        fcm.send(registration_ids, data: { score: "5x1", time: "15:10" })
-        stub_with_data.should have_been_requested
-      end
-    end
-
-    context "sending notification to a topic" do
-      let!(:stub_with_valid_topic) do
-        stub_request(:post, send_url)
-          .with(body: '{"to":"/topics/TopicA","data":{"score":"5x1","time":"15:10"}}',
-                headers: valid_request_headers)
-          .to_return(status: 200, body: "", headers: {})
-      end
-      let!(:stub_with_invalid_topic) do
-        stub_request(:post, send_url)
-          .with(body: '{"condition":"/topics/TopicA$","data":{"score":"5x1","time":"15:10"}}',
-                headers: valid_request_headers)
-          .to_return(status: 200, body: "", headers: {})
-      end
-
-      describe "#send_to_topic" do
-        it "should send the data in a post request to fcm" do
-          fcm = FCM.new(api_key)
-          fcm.send_to_topic(valid_topic, data: { score: "5x1", time: "15:10" })
-          stub_with_valid_topic.should have_been_requested
-        end
-
-        it "should not send to invalid topics" do
-          fcm = FCM.new(api_key)
-          fcm.send_to_topic(invalid_topic, data: { score: "5x1", time: "15:10" })
-          stub_with_invalid_topic.should_not have_been_requested
-        end
-      end
-    end
-
-    context "sending notification to a topic condition" do
-      let!(:stub_with_valid_condition) do
-        stub_request(:post, send_url)
-          .with(body: '{"condition":"\'TopicA\' in topics && (\'TopicB\' in topics || \'TopicC\' in topics)","data":{"score":"5x1","time":"15:10"}}',
-                headers: valid_request_headers)
-          .to_return(status: 200, body: "", headers: {})
-      end
-      let!(:stub_with_invalid_condition) do
-        stub_request(:post, send_url)
-          .with(body: '{"condition":"\'TopicA\' in topics and some other text (\'TopicB\' in topics || \'TopicC\' in topics)","data":{"score":"5x1","time":"15:10"}}',
-                headers: valid_request_headers)
-          .to_return(status: 200, body: "", headers: {})
-      end
-      let!(:stub_with_invalid_condition_topic) do
-        stub_request(:post, send_url)
-          .with(body: '{"condition":"\'TopicA$\' in topics","data":{"score":"5x1","time":"15:10"}}',
-                headers: valid_request_headers)
-          .to_return(status: 200, body: "", headers: {})
-      end
-
-      describe "#send_to_topic_condition" do
-        it "should send the data in a post request to fcm" do
-          fcm = FCM.new(api_key)
-          fcm.send_to_topic_condition(valid_condition, data: { score: "5x1", time: "15:10" })
-          stub_with_valid_condition.should have_been_requested
-        end
-
-        it "should not send to invalid conditions" do
-          fcm = FCM.new(api_key)
-          fcm.send_to_topic_condition(invalid_condition, data: { score: "5x1", time: "15:10" })
-          stub_with_invalid_condition.should_not have_been_requested
-        end
-
-        it "should not send to invalid topics in a condition" do
-          fcm = FCM.new(api_key)
-          fcm.send_to_topic_condition(invalid_condition_topic, data: { score: "5x1", time: "15:10" })
-          stub_with_invalid_condition_topic.should_not have_been_requested
-        end
-      end
-    end
-
-    context "when send_notification responds with failure" do
-      let(:mock_request_attributes) do
-        {
-          body: valid_request_body.to_json,
-          headers: valid_request_headers,
-        }
-      end
-
-      subject { FCM.new(api_key) }
-
-      context "on failure code 400" do
-        before do
-          stub_request(:post, send_url).with(
-            mock_request_attributes
-          ).to_return(
-            # ref: https://firebase.google.com/docs/cloud-messaging/http-server-ref#interpret-downstream
-            body: "{}",
-            headers: {},
-            status: 400,
-          )
-        end
-        it "should not send notification due to 400" do
-          subject.send(registration_ids).should eq(body: "{}",
-                                                   headers: {},
-                                                   response: "Only applies for JSON requests. Indicates that the request could not be parsed as JSON, or it contained invalid fields.",
-                                                   status_code: 400)
-        end
-      end
-
-      context "on failure code 401" do
-        before do
-          stub_request(:post, send_url).with(
-            mock_request_attributes
-          ).to_return(
-            # ref: https://firebase.google.com/docs/cloud-messaging/http-server-ref#interpret-downstream
-            body: "{}",
-            headers: {},
-            status: 401,
-          )
-        end
-
-        it "should not send notification due to 401" do
-          subject.send(registration_ids).should eq(body: "{}",
-                                                   headers: {},
-                                                   response: "There was an error authenticating the sender account.",
-                                                   status_code: 401)
-        end
-      end
-
-      context "on failure code 503" do
-        before do
-          stub_request(:post, send_url).with(
-            mock_request_attributes
-          ).to_return(
-            # ref: https://firebase.google.com/docs/cloud-messaging/http-server-ref#interpret-downstream
-            body: "{}",
-            headers: {},
-            status: 503,
-          )
-        end
-
-        it "should not send notification due to 503" do
-          subject.send(registration_ids).should eq(body: "{}",
-                                                   headers: {},
-                                                   response: "Server is temporarily unavailable.",
-                                                   status_code: 503)
-        end
-      end
-
-      context "on failure code 5xx" do
-        before do
-          stub_request(:post, send_url).with(
-            mock_request_attributes
-          ).to_return(
-            # ref: https://firebase.google.com/docs/cloud-messaging/http-server-ref#interpret-downstream
-            body: '{"body-key" => "Body value"}',
-            headers: { "header-key" => "Header value" },
-            status: 599,
-          )
-        end
-
-        it "should not send notification due to 599" do
-          subject.send(registration_ids).should eq(body: '{"body-key" => "Body value"}',
-                                                   headers: { "header-key" => "Header value" },
-                                                   response: "There was an internal error in the FCM server while trying to process the request.",
-                                                   status_code: 599)
-        end
-      end
-    end
-
-    context "when send_notification responds canonical_ids" do
-      let(:mock_request_attributes) do
-        {
-          body: valid_request_body.to_json,
-          headers: valid_request_headers,
-        }
-      end
-
-      let(:valid_response_body_with_canonical_ids) do
-        {
-          failure: 0, canonical_ids: 1, results: [{ registration_id: "43", message_id: "0:1385025861956342%572c22801bb3" }],
-        }
-      end
-
-      subject { FCM.new(api_key) }
-
-      before do
-        stub_request(:post, send_url).with(
-          mock_request_attributes
-        ).to_return(
-          # ref: https://firebase.google.com/docs/cloud-messaging/http-server-ref#interpret-downstream
-          body: valid_response_body_with_canonical_ids.to_json,
-          headers: {},
-          status: 200,
-        )
-      end
-
-      it "should contain canonical_ids" do
-        response = subject.send(registration_ids)
-
-        response.should eq(headers: {},
-                           canonical_ids: [{ old: "42", new: "43" }],
-                           not_registered_ids: [],
-                           status_code: 200,
-                           response: "success",
-                           body: '{"failure":0,"canonical_ids":1,"results":[{"registration_id":"43","message_id":"0:1385025861956342%572c22801bb3"}]}')
-      end
-    end
-
-    context "when send_notification responds with NotRegistered" do
-      subject { FCM.new(api_key) }
-
-      let(:mock_request_attributes) do
-        {
-          body: valid_request_body.to_json,
-          headers: valid_request_headers,
-        }
-      end
-
-      let(:valid_response_body_with_not_registered_ids) do
-        {
-          canonical_ids: 0, failure: 1, results: [{ error: "NotRegistered" }],
-        }
-      end
-
-      before do
-        stub_request(:post, send_url).with(
-          mock_request_attributes
-        ).to_return(
-          body: valid_response_body_with_not_registered_ids.to_json,
-          headers: {},
-          status: 200,
-        )
-      end
-
-      it "should contain not_registered_ids" do
-        response = subject.send(registration_ids)
-        response.should eq(
-          headers: {},
-          canonical_ids: [],
-          not_registered_ids: registration_ids,
-          status_code: 200,
-          response: "success",
-          body: '{"canonical_ids":0,"failure":1,"results":[{"error":"NotRegistered"}]}',
-        )
-      end
-    end
+  let(:large_file_name) do
+    "#{Array.new(1021) { "a" }.join}.txt"
   end
 
-  describe "sending group notifications" do
-    # TODO: refactor to should_behave_like
-    let(:valid_request_headers) do
-      {
-        "Authorization" => "key=#{api_key}",
-        "Content-Type" => "application/json",
-        "Project-Id" => project_id,
-      }
-    end
-    let(:valid_response_body) do
-      { notification_key: "APA91bGHXQBB...9QgnYOEURwm0I3lmyqzk2TXQ" }
-    end
-
-    let(:default_valid_request_body) do
-      {
-        registration_ids: registration_ids,
-        operation: "create",
-        notification_key_name: key_name,
-      }
-    end
-
-    subject { FCM.new(api_key) }
-
-    # ref: https://firebase.google.com/docs/cloud-messaging/notifications#managing-device-groups-on-the-app-server
-    context "create" do
-      let(:valid_request_body) do
-        default_valid_request_body.merge({
-          operation: "create",
-        })
-      end
-
-      let(:mock_request_attributes) do
-        {
-          body: valid_request_body.to_json,
-          headers: valid_request_headers,
-        }
-      end
-
-      before do
-        stub_request(:post, group_notification_base_uri).with(
-          mock_request_attributes
-        ).to_return(
-          body: valid_response_body.to_json,
-          headers: {},
-          status: 200,
-        )
-      end
-
-      it "should send a post request" do
-        response = subject.create(key_name, project_id, registration_ids)
-        response.should eq(
-          headers: {},
-          status_code: 200,
-          response: "success",
-          body: valid_response_body.to_json,
-        )
-      end
-    end # create context
-
-    context "add" do
-      let(:valid_request_body) do
-        default_valid_request_body.merge({
-          operation: "add",
-          notification_key: notification_key,
-        })
-      end
-
-      let(:mock_request_attributes) do
-        {
-          body: valid_request_body.to_json,
-          headers: valid_request_headers,
-        }
-      end
-
-      before do
-        stub_request(:post, group_notification_base_uri).with(
-          mock_request_attributes
-        ).to_return(
-          body: valid_response_body.to_json,
-          headers: {},
-          status: 200,
-        )
-      end
-
-      it "should send a post request" do
-        response = subject.add(key_name, project_id, notification_key, registration_ids)
-        response.should eq(
-          headers: {},
-          status_code: 200,
-          response: "success",
-          body: valid_response_body.to_json,
-        )
-      end
-    end # add context
-
-    context "remove" do
-      let(:valid_request_body) do
-        default_valid_request_body.merge({
-          operation: "remove",
-          notification_key: notification_key,
-        })
-      end
-
-      let(:mock_request_attributes) do
-        {
-          body: valid_request_body.to_json,
-          headers: valid_request_headers,
-        }
-      end
-
-      before do
-        stub_request(:post, group_notification_base_uri).with(
-          mock_request_attributes
-        ).to_return(
-          body: valid_response_body.to_json,
-          headers: {},
-          status: 200,
-        )
-      end
-
-      it "should send a post request" do
-        response = subject.remove(key_name, project_id, notification_key, registration_ids)
-        response.should eq(
-          headers: {},
-          status_code: 200,
-          response: "success",
-          body: valid_response_body.to_json,
-        )
-      end
-    end # remove context
+  let(:creds_error) do
+    FCM::InvalidCredentialError
   end
 
-  describe "#recover_notification_key" do
-    it "sends a 'retrieve notification key' request" do
-      uri = "#{FCM::GROUP_NOTIFICATION_BASE_URI}/gcm/notification"
-      endpoint = stub_request(:get, uri).with(
-        headers: {
-          "Content-Type" => "application/json",
-          "Authorization" => "key=TEST_SERVER_KEY",
-          "project_id" => "TEST_PROJECT_ID",
-        },
-        query: { notification_key_name: "TEST_KEY_NAME" },
-      )
-      client = FCM.new("TEST_SERVER_KEY")
-
-      client.recover_notification_key("TEST_KEY_NAME", "TEST_PROJECT_ID")
-
-      expect(endpoint).to have_been_requested
-    end
+  let(:json_credentials) do
+    {
+      type: "service_account",
+      project_id: "example",
+      private_key_id: "c09c4593eee53707ca9f4208fbd6fe72b29fc7ab",
+      private_key: OpenSSL::PKey::RSA.new(2048).to_s,
+      client_email: client_email,
+      client_id: "acedc3c0a63b3562376386f0.apps.googleusercontent.com",
+      auth_uri: "https://accounts.google.com/o/oauth2/auth",
+      token_uri: "https://oauth2.googleapis.com/token",
+      auth_provider_x509_cert_url: "https://www.googleapis.com/oauth2/v1/certs",
+      client_x509_cert_url: client_x509_cert_url,
+      universe_domain: "googleapis.com"
+    }.to_json
   end
 
-  describe "subscribing to a topic" do
-    # TODO
+  before do
+    allow(client).to receive(:json_key)
+
+    # Mock the Google::Auth::ServiceAccountCredentials
+    allow(Google::Auth::ServiceAccountCredentials).to receive(:make_creds)
+      .and_return(double(fetch_access_token!: { "access_token" => mock_token }))
   end
 
-  describe 'getting instance info' do
-    subject(:get_info) { client.get_instance_id_info(registration_id, options) }
-
-    let(:options) { nil }
-    let(:client) { FCM.new('TEST_SERVER_KEY') }
-    let(:base_uri) { "#{FCM::INSTANCE_ID_API}/iid/info" }
-    let(:uri) { "#{base_uri}/#{registration_id}" }
-    let(:mock_request_attributes) do
-      { headers: {
-        'Authorization' => 'key=TEST_SERVER_KEY',
-        'Content-Type' => 'application/json'
-      } }
-    end
-
-    context 'without options' do
-      it 'calls info endpoint' do
-        endpoint = stub_request(:get, uri).with(mock_request_attributes)
-        get_info
-        expect(endpoint).to have_been_requested
-      end
-    end
-
-    context 'with detail option' do
-      let(:uri) { "#{base_uri}/#{registration_id}?details=true" }
-      let(:options) { { details: true } }
-
-      it 'calls info endpoint' do
-        endpoint = stub_request(:get, uri).with(mock_request_attributes)
-        get_info
-        expect(endpoint).to have_been_requested
-      end
-    end
+  it "initializes" do
+    expect { client }.not_to raise_error
   end
 
   describe "credentials path" do
     it "can be a path to a file" do
-      fcm = FCM.new("test", "README.md")
+      fcm = described_class.new("README.md")
       expect(fcm.__send__(:json_key).class).to eq(File)
     end
 
+    it "raises an error when passed a large path" do
+      expect do
+        described_class.new(large_file_name).__send__(:json_key)
+      end.to raise_error(creds_error)
+    end
+
     it "can be an IO object" do
-      fcm = FCM.new("test", StringIO.new("hey"))
+      fcm = described_class.new(StringIO.new("hey"))
       expect(fcm.__send__(:json_key).class).to eq(StringIO)
+
+      temp_file = Tempfile.new("hello_world.json")
+      temp_file.write(json_credentials)
+      fcm_with_temp_file = described_class.new(temp_file)
+
+      expect do
+        fcm_with_temp_file
+      end.not_to raise_error
+      temp_file.close
+      temp_file.unlink
+    end
+
+    it "raises an error when passed a non IO-like object" do
+      expect do
+        described_class.new(nil, "", {}).__send__(:json_key)
+      end.to raise_error(creds_error, "credentials must be " \
+                                      "an IO-like object or path. You passed nil.")
+
+      expect do
+        described_class.new(json_credentials, "", {}).__send__(:json_key)
+      end.to raise_error(creds_error, "credentials must be " \
+                                      "an IO-like object or path. You passed a String.")
+
+      expect do
+        described_class.new({}, "", {}).__send__(:json_key)
+      end.to raise_error(creds_error, "credentials must be " \
+                                      "an IO-like object or path. You passed a Hash.")
+    end
+
+    it "raises an error when passed a non-existent credentials file path" do
+      fcm = described_class.new("spec/fake_credentials.json", "", {})
+      expect { fcm.__send__(:json_key) }.to raise_error(creds_error)
+    end
+
+    it "raises an error when passed a string of a file that does not exist" do
+      fcm = described_class.new("example.txt", "", {})
+      expect { fcm.__send__(:json_key) }.to raise_error(creds_error)
+    end
+  end
+
+  describe "#send_v1 or #send_notification_v1" do
+    let(:client) { described_class.new(json_key_path, project_name) }
+
+    let(:uri) { "#{FCM::BASE_URI_V1}#{project_name}/messages:send" }
+    let(:status_code) { 200 }
+
+    let(:stub_fcm_send_v1_request) do
+      stub_request(:post, uri).with(
+        body: { "message" => send_v1_params }.to_json,
+        headers: mock_headers
+      ).to_return(
+        # ref: https://firebase.google.com/docs/cloud-messaging/http-server-ref#interpret-downstream
+        body: "{}",
+        headers: {},
+        status: status_code
+      )
+    end
+
+    before do
+      stub_fcm_send_v1_request
+    end
+
+    shared_examples "succesfuly send notification" do
+      it "sends notification of HTTP V1 using POST to FCM server" do
+        client.send_v1(send_v1_params).should eq(
+          response: "success", body: "{}", headers: {}, status_code: 200
+        )
+        stub_fcm_send_v1_request.should have_been_made.times(1)
+      end
+    end
+
+    describe "send to token" do
+      let(:token) { "4sdsx" }
+      let(:send_v1_params) do
+        {
+          "token" => token,
+          "notification" => {
+            "title" => "Breaking News",
+            "body" => "New news story available."
+          },
+          "data" => {
+            "story_id" => "story_12345"
+          },
+          "android" => {
+            "notification" => {
+              "click_action" => "TOP_STORY_ACTIVITY",
+              "body" => "Check out the Top Story"
+            }
+          },
+          "apns" => {
+            "payload" => {
+              "aps" => {
+                "category" => "NEW_MESSAGE_CATEGORY"
+              }
+            }
+          }
+        }
+      end
+
+      it_behaves_like "succesfuly send notification"
+
+      it "includes all the response" do
+        response = client.send_v1(send_v1_params)
+        expect(response[:status_code]).to eq(status_code)
+        expect(response[:response]).to eq("success")
+        expect(response[:body]).to eq("{}")
+        expect(response[:headers]).to eq({})
+        expect(response[:canonical_ids]).to be_nil
+        expect(response[:not_registered_ids]).to be_nil
+      end
+    end
+
+    describe "send to multiple tokens" do
+      let(:tokens) { %w[4sdsx 4sdsy] }
+      let(:send_v1_params) do
+        {
+          "token" => tokens,
+          "notification" => {
+            "title" => "Breaking News",
+            "body" => "New news story available."
+          }
+        }
+      end
+
+      it_behaves_like "succesfuly send notification"
+    end
+
+    describe "send to topic" do
+      let(:topic) { "news" }
+      let(:send_v1_params) do
+        {
+          "topic" => topic,
+          "notification" => {
+            "title" => "Breaking News",
+            "body" => "New news story available."
+          }
+        }
+      end
+
+      it_behaves_like "succesfuly send notification"
+
+      context "when topic is invalid" do
+        let(:topic) { "/topics/news$" }
+
+        it "raises error" do
+          stub_fcm_send_v1_request.should_not have_been_requested
+        end
+      end
+    end
+
+    describe "send to condition" do
+      let(:condition) { "'foo' in topics" }
+      let(:send_v1_params) do
+        {
+          "condition" => condition,
+          "notification" => {
+            "title" => "Breaking News",
+            "body" => "New news story available."
+          }
+        }
+      end
+
+      it_behaves_like "succesfuly send notification"
+    end
+
+    describe "send to notification_key" do
+      let(:notification_key) { "notification_key" }
+      let(:send_v1_params) do
+        {
+          "notification_key" => notification_key,
+          "notification" => {
+            "title" => "Breaking News",
+            "body" => "New news story available."
+          }
+        }
+      end
+
+      it_behaves_like "succesfuly send notification"
+    end
+
+    context "when project_name is empty" do
+      let(:project_name) { "" }
+      let(:send_v1_params) do
+        {
+          "token" => "4sdsx",
+          "notification" => {
+            "title" => "Breaking News",
+            "body" => "New news story available."
+          }
+        }
+      end
+
+      it "does not send notification" do
+        client.send_v1(send_v1_params)
+        stub_fcm_send_v1_request.should_not have_been_requested
+      end
+    end
+
+    describe "error handling" do
+      let(:send_v1_params) do
+        {
+          "token" => "4sdsx",
+          "notification" => {
+            "title" => "Breaking News",
+            "body" => "New news story available."
+          }
+        }
+      end
+
+      context "when status_code is 400" do
+        let(:status_code) { 400 }
+
+        it "raises error" do
+          expect { client.send_v1(send_v1_params) }
+            .to raise_error(RuntimeError, "Error on fcm: {}")
+        end
+      end
+
+      context "when status_code is 401" do
+        let(:status_code) { 401 }
+
+        it "raises error" do
+          expect { client.send_v1(send_v1_params) }
+            .to raise_error(RuntimeError, "Error on fcm: {}")
+        end
+      end
+
+      context "when status_code is 500" do
+        let(:status_code) { 500 }
+
+        it "raises error" do
+          expect { client.send_v1(send_v1_params) }
+            .to raise_error(RuntimeError, "Error on fcm: {}")
+        end
+      end
+
+      context "when status_code is 503" do
+        let(:status_code) { 503 }
+
+        it "raises error" do
+          expect { client.send_v1(send_v1_params) }
+            .to raise_error(RuntimeError, "Error on fcm: {}")
+        end
+      end
+    end
+  end
+
+  describe "#send_to_topic" do
+    let(:client) { described_class.new(json_key_path, project_name) }
+
+    let(:uri) { "#{FCM::BASE_URI_V1}#{project_name}/messages:send" }
+
+    let(:topic) { "news" }
+    let(:params) do
+      {
+        "topic" => topic
+      }.merge(options)
+    end
+    let(:options) do
+      {
+        "data" => {
+          "story_id" => "story_12345"
+        }
+      }
+    end
+
+    let(:stub_fcm_send_to_topic_request) do
+      stub_request(:post, uri).with(
+        body: { "message" => params }.to_json,
+        headers: mock_headers
+      ).to_return(
+        body: "{}",
+        headers: {},
+        status: 200
+      )
+    end
+
+    before do
+      stub_fcm_send_to_topic_request
+    end
+
+    it "sends notification to topic using POST to FCM server" do
+      client.send_to_topic(topic, options).should eq(
+        response: "success", body: "{}", headers: {}, status_code: 200
+      )
+      stub_fcm_send_to_topic_request.should have_been_made.times(1)
+    end
+
+    context "when topic is invalid" do
+      let(:topic) { "/topics/news$" }
+
+      it "raises error" do
+        client.send_to_topic(topic, options)
+        stub_fcm_send_to_topic_request.should_not have_been_requested
+      end
+    end
+  end
+
+  describe "#send_to_topic_condition" do
+    let(:client) { described_class.new(json_key_path, project_name) }
+
+    let(:uri) { "#{FCM::BASE_URI_V1}#{project_name}/messages:send" }
+
+    let(:topic_condition) { "'foo' in topics" }
+    let(:params) do
+      {
+        "condition" => topic_condition
+      }.merge(options)
+    end
+    let(:options) do
+      {
+        "data" => {
+          "story_id" => "story_12345"
+        }
+      }
+    end
+
+    let(:stub_fcm_send_to_topic_condition_request) do
+      stub_request(:post, uri).with(
+        body: { "message" => params }.to_json,
+        headers: mock_headers
+      ).to_return(
+        body: "{}",
+        headers: {},
+        status: 200
+      )
+    end
+
+    before do
+      stub_fcm_send_to_topic_condition_request
+    end
+
+    it "sends notification to topic_condition using POST to FCM server" do
+      client.send_to_topic_condition(topic_condition, options).should eq(
+        response: "success", body: "{}", headers: {}, status_code: 200
+      )
+      stub_fcm_send_to_topic_condition_request.should have_been_made.times(1)
+    end
+
+    context "when topic_condition is invalid" do
+      let(:topic_condition) { "'foo' in topics$" }
+
+      it "raises error" do
+        client.send_to_topic_condition(topic_condition, options)
+        stub_fcm_send_to_topic_condition_request.should_not have_been_requested
+      end
+    end
+  end
+
+  describe "#get_instance_id_info" do
+    subject(:get_info) { client.get_instance_id_info(registration_token, options) }
+
+    let(:options) { nil }
+    let(:base_uri) { "#{FCM::INSTANCE_ID_API}/iid/info" }
+    let(:uri) { "#{base_uri}/#{registration_token}" }
+    let(:registration_token) { "42" }
+
+    context "without options" do
+      it "calls info endpoint" do
+        endpoint = stub_request(:get, uri).with(headers: mock_headers)
+        get_info
+        expect(endpoint).to have_been_requested
+      end
+    end
+
+    context "with detail option" do
+      let(:uri) { "#{base_uri}/#{registration_token}?details=true" }
+      let(:options) { { details: true } }
+
+      it "calls info endpoint" do
+        endpoint = stub_request(:get, uri).with(headers: mock_headers)
+        get_info
+        expect(endpoint).to have_been_requested
+      end
+    end
+  end
+
+  describe "topic subscriptions" do
+    let(:topic) { "news" }
+    let(:registration_token) { "42" }
+    let(:registration_token2) { "43" }
+    let(:registration_tokens) { [registration_token, registration_token2] }
+
+    describe "#topic_subscription" do
+      subject(:subscribe) { client.topic_subscription(topic, registration_token) }
+
+      let(:uri) { "#{FCM::INSTANCE_ID_API}/iid/v1/#{registration_token}/rel/topics/#{topic}" }
+
+      it "subscribes to a topic" do
+        endpoint = stub_request(:post, uri).with(headers: mock_headers)
+        subscribe
+        expect(endpoint).to have_been_requested
+      end
+    end
+
+    describe "#topic_unsubscription" do
+      subject(:unsubscribe) { client.topic_unsubscription(topic, registration_token) }
+
+      let(:uri) { "#{FCM::INSTANCE_ID_API}/iid/v1:batchRemove" }
+      let(:params) { { to: "/topics/#{topic}", registration_tokens: [registration_token] } }
+
+      it "unsubscribes from a topic" do
+        endpoint = stub_request(:post, uri).with(body: params.to_json, headers: mock_headers)
+        unsubscribe
+        expect(endpoint).to have_been_requested
+      end
+    end
+
+    describe "#batch_topic_subscription" do
+      subject(:batch_subscribe) { client.batch_topic_subscription(topic, registration_tokens) }
+
+      let(:uri) { "#{FCM::INSTANCE_ID_API}/iid/v1:batchAdd" }
+      let(:params) { { to: "/topics/#{topic}", registration_tokens: registration_tokens } }
+
+      it "subscribes to a topic" do
+        endpoint = stub_request(:post, uri).with(body: params.to_json, headers: mock_headers)
+        batch_subscribe
+        expect(endpoint).to have_been_requested
+      end
+    end
+
+    describe "#batch_topic_unsubscription" do
+      subject(:batch_unsubscribe) { client.batch_topic_unsubscription(topic, registration_tokens) }
+
+      let(:uri) { "#{FCM::INSTANCE_ID_API}/iid/v1:batchRemove" }
+      let(:params) { { to: "/topics/#{topic}", registration_tokens: registration_tokens } }
+
+      it "unsubscribes from a topic" do
+        endpoint = stub_request(:post, uri).with(body: params.to_json, headers: mock_headers)
+        batch_unsubscribe
+        expect(endpoint).to have_been_requested
+      end
+    end
+  end
+
+  describe "keep_alive_connections" do
+    let(:client) { described_class.new(json_key_path, project_name, keep_alive_connections: true) }
+    let(:uri) { "#{FCM::BASE_URI_V1}#{project_name}/messages:send" }
+    let(:send_v1_params) { { "token" => "token", "notification" => { "title" => "hi" } } }
+
+    before do
+      stub_request(:post, uri).to_return(body: "{}", headers: {}, status: 200)
+    end
+
+    it "caches a Faraday connection per (thread, uri) and reuses it across calls" do
+      client.send_v1(send_v1_params)
+      first = client.__send__(:thread_connections)[FCM::BASE_URI_V1]
+
+      client.send_v1(send_v1_params)
+      second = client.__send__(:thread_connections)[FCM::BASE_URI_V1]
+
+      expect(first).to be_a(Faraday::Connection)
+      expect(second).to equal(first)
+    end
+
+    it "discards the cached connection when a request raises" do
+      client.send_v1(send_v1_params)
+      expect(client.__send__(:thread_connections)[FCM::BASE_URI_V1]).to be_a(Faraday::Connection)
+
+      stub_request(:post, uri).to_raise(Faraday::ConnectionFailed.new("boom"))
+
+      expect { client.send_v1(send_v1_params) }.to raise_error(Faraday::ConnectionFailed)
+      expect(client.__send__(:thread_connections)).not_to have_key(FCM::BASE_URI_V1)
+    end
+
+    it "does not share connections across FCM instances" do
+      other_client = described_class.new(json_key_path, project_name, keep_alive_connections: true)
+      allow(other_client).to receive(:json_key)
+
+      client.send_v1(send_v1_params)
+      other_client.send_v1(send_v1_params)
+
+      expect(client.__send__(:thread_connections)[FCM::BASE_URI_V1])
+        .not_to equal(other_client.__send__(:thread_connections)[FCM::BASE_URI_V1])
+    end
+
+    it "falls back to one-shot connections when disabled" do
+      one_shot_client = described_class.new(json_key_path, project_name)
+      allow(one_shot_client).to receive(:json_key)
+      one_shot_client.send_v1(send_v1_params)
+
+      expect(one_shot_client.__send__(:thread_connections)).to be_empty
+    end
+  end
+
+  describe "request timeouts" do
+    it "defaults timeout and open_timeout to DEFAULT_TIMEOUT" do
+      fcm = described_class.new(json_key_path, project_name)
+      allow(fcm).to receive(:json_key)
+
+      fcm.__send__(:for_uri, FCM::BASE_URI_V1) do |conn|
+        expect(conn.options.timeout).to eq(FCM::DEFAULT_TIMEOUT)
+        expect(conn.options.open_timeout).to eq(FCM::DEFAULT_TIMEOUT)
+      end
+    end
+
+    it "honours :timeout and :open_timeout from http_options" do
+      fcm = described_class.new(json_key_path, project_name, timeout: 7, open_timeout: 3)
+      allow(fcm).to receive(:json_key)
+
+      fcm.__send__(:for_uri, FCM::BASE_URI_V1) do |conn|
+        expect(conn.options.timeout).to eq(7)
+        expect(conn.options.open_timeout).to eq(3)
+      end
+    end
+
+    it "honours :timeout and :open_timeout on keep-alive connections" do
+      fcm = described_class.new(
+        json_key_path, project_name, keep_alive_connections: true, timeout: 7, open_timeout: 3
+      )
+      allow(fcm).to receive(:json_key)
+
+      fcm.__send__(:for_uri, FCM::BASE_URI_V1) do |conn|
+        expect(conn.options.timeout).to eq(7)
+        expect(conn.options.open_timeout).to eq(3)
+      end
     end
   end
 end
