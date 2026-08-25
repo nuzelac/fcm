@@ -64,9 +64,21 @@ describe FCM do
   end
 
   describe "credentials path" do
-    it "can be a path to a file" do
+    it "loads path credentials into fresh in-memory streams" do
       fcm = described_class.new("README.md")
-      expect(fcm.__send__(:json_key).class).to eq(File)
+
+      first = fcm.__send__(:json_key)
+      expect(first).to be_a(StringIO)
+      expect(first.read).to eq(File.binread("README.md"))
+
+      first.close
+
+      second = fcm.__send__(:json_key)
+      expect(second).to be_a(StringIO)
+      expect(second).not_to equal(first)
+      expect(second).not_to be_closed
+      expect { second.rewind }.not_to raise_error
+      expect(second.read).to eq(File.binread("README.md"))
     end
 
     it "raises an error when passed a large path" do
@@ -75,19 +87,21 @@ describe FCM do
       end.to raise_error(creds_error)
     end
 
-    it "can be an IO object" do
-      fcm = described_class.new(StringIO.new("hey"))
-      expect(fcm.__send__(:json_key).class).to eq(StringIO)
+    it "loads IO credentials without closing the caller-owned object" do
+      Tempfile.create("hello_world.json") do |credentials_io|
+        credentials_io.write(json_credentials)
+        credentials_io.flush
 
-      temp_file = Tempfile.new("hello_world.json")
-      temp_file.write(json_credentials)
-      fcm_with_temp_file = described_class.new(temp_file)
+        fcm = described_class.new(credentials_io)
+        first = fcm.__send__(:json_key)
+        second = fcm.__send__(:json_key)
 
-      expect do
-        fcm_with_temp_file
-      end.not_to raise_error
-      temp_file.close
-      temp_file.unlink
+        expect(first).to be_a(StringIO)
+        expect(first.read).to eq(json_credentials)
+        expect(second).not_to equal(first)
+        expect(second.read).to eq(json_credentials)
+        expect(credentials_io).not_to be_closed
+      end
     end
 
     it "raises an error when passed a non IO-like object" do

@@ -3,6 +3,7 @@
 require "faraday"
 require "json"
 require "googleauth"
+require "stringio"
 
 class FCM
   class InvalidCredentialError < StandardError; end
@@ -21,6 +22,7 @@ class FCM
     @json_key_path = json_key_path
     @project_name = project_name
     @http_options = http_options
+    @json_key_data_mutex = Mutex.new
     @keep_alive_connections = http_options.fetch(:keep_alive_connections, false)
     @keep_alive_idle_timeout_seconds =
       http_options.fetch(:keep_alive_idle_timeout_seconds, DEFAULT_KEEP_ALIVE_IDLE_TIMEOUT_SECONDS)
@@ -372,12 +374,27 @@ class FCM
   end
 
   def json_key
-    @json_key ||= if @json_key_path.respond_to?(:read)
-                    @json_key_path
-                  elsif valid_json_key_path?(@json_key_path)
-                    File.open(@json_key_path)
-                  else
-                    raise_credentials_error(@json_key_path)
-                  end
+    StringIO.new(json_key_data.dup)
+  end
+
+  def json_key_data
+    return @json_key_data if defined?(@json_key_data)
+
+    @json_key_data_mutex.synchronize do
+      return @json_key_data if defined?(@json_key_data)
+
+      @json_key_data = load_json_key_data.freeze
+    end
+  end
+
+  def load_json_key_data
+    if @json_key_path.respond_to?(:read)
+      @json_key_path.rewind if @json_key_path.respond_to?(:rewind)
+      @json_key_path.read
+    elsif valid_json_key_path?(@json_key_path)
+      File.binread(@json_key_path)
+    else
+      raise_credentials_error(@json_key_path)
+    end
   end
 end
